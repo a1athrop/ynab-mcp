@@ -598,30 +598,35 @@ def get_month(
 def get_transactions(
     budget_id: Optional[str] = None,
     since_date: Optional[str] = None,
+    before_date: Optional[str] = None,
     type: Optional[str] = None,
     account_id: Optional[str] = None,
     category_id: Optional[str] = None,
     payee_id: Optional[str] = None,
-    max_results: int = 50,
+    max_results: int = 200,
 ) -> str:
     """Search and list transactions with optional filters.
 
     Args:
         budget_id: Budget ID (uses default if omitted).
         since_date: Only return transactions on or after this date (YYYY-MM-DD).
+        before_date: Only return transactions before this date (YYYY-MM-DD). Server-side filter.
+                     Use with since_date for a date range, e.g. since_date="2024-02-01",
+                     before_date="2024-03-01" for all February 2024 transactions.
         type: Filter by "uncategorized" or "unapproved".
         account_id: Filter to a specific account.
         category_id: Filter to a specific category.
         payee_id: Filter to a specific payee.
-        max_results: Maximum transactions to return (default 50).
+        max_results: Maximum transactions to return (default 200).
 
     Returns:
         List of transactions with date, amount, payee, category, memo, cleared status.
+        Includes truncated flag and total_available count when results are capped.
     """
     _require_config()
     bid = _resolve_budget_id(budget_id)
 
-    # Build query params
+    # Build query params (only since_date is supported by YNAB API natively)
     params = []
     if since_date:
         params.append(f"since_date={urllib.parse.quote(since_date)}")
@@ -648,8 +653,21 @@ def get_transactions(
     result = _api_request(path)
     txns_data = result.get("data", {}).get("transactions", [])
 
-    # Limit results (YNAB returns all matching, we cap it)
-    txns_data = txns_data[-max_results:] if len(txns_data) > max_results else txns_data
+    # Server-side before_date filter (YNAB API doesn't support this natively)
+    if before_date:
+        txns_data = [t for t in txns_data if t.get("date", "") < before_date]
+
+    # Track total before truncation
+    total_available = len(txns_data)
+
+    # Limit results — return FIRST N (oldest) when since_date is set,
+    # LAST N (most recent) otherwise. This ensures date-range queries
+    # get the earliest matching transactions, not the latest.
+    if len(txns_data) > max_results:
+        if since_date:
+            txns_data = txns_data[:max_results]  # First N (oldest)
+        else:
+            txns_data = txns_data[-max_results:]  # Last N (most recent)
 
     transactions = []
     for t in txns_data:
@@ -688,6 +706,8 @@ def get_transactions(
     return json.dumps({
         "success": True,
         "count": len(transactions),
+        "total_available": total_available,
+        "truncated": total_available > len(transactions),
         "transactions": transactions,
         "server_knowledge": result.get("data", {}).get("server_knowledge"),
     }, indent=2)
