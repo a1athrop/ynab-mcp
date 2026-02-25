@@ -725,7 +725,7 @@ def create_transaction(
     cleared: str = "cleared",
     approved: bool = True,
     flag_color: Optional[str] = None,
-    subtransactions_json: Optional[str] = None,
+    subtransactions: Optional[list] = None,
     budget_id: Optional[str] = None,
 ) -> str:
     """Create a new transaction.
@@ -742,12 +742,10 @@ def create_transaction(
         cleared: Cleared status: "cleared", "uncleared", or "reconciled". Defaults to "cleared".
         approved: Whether the transaction is approved. Defaults to True.
         flag_color: Optional flag: red, orange, yellow, green, blue, purple.
-        subtransactions_json: JSON string of subtransaction array for split transactions.
+        subtransactions: Array of subtransaction objects for split transactions.
                 Each item: {"amount": int, "category_id": "uuid", "memo": "text", "payee_id": "uuid", "payee_name": "text"}.
                 Only amount and category_id are required per sub. The sub amounts must sum to the parent amount.
                 When using subtransactions, omit category_id on the parent (it becomes a split).
-                Example: '[{"amount": -50000, "category_id": "abc-123", "memo": "Groceries"},
-                           {"amount": -25000, "category_id": "def-456", "memo": "B/B portion"}]'
         budget_id: Budget ID (uses default if omitted).
 
     Returns:
@@ -776,20 +774,14 @@ def create_transaction(
     if flag_color:
         txn["flag_color"] = flag_color
 
-    if subtransactions_json:
-        try:
-            subs = json.loads(subtransactions_json)
-        except json.JSONDecodeError as e:
-            return json.dumps({"success": False, "error": f"Invalid subtransactions_json: {e}"})
-        if not isinstance(subs, list):
-            return json.dumps({"success": False, "error": "subtransactions_json must be a JSON array."})
-        sub_total = sum(s.get("amount", 0) for s in subs)
+    if subtransactions:
+        sub_total = sum(s.get("amount", 0) for s in subtransactions)
         if sub_total != amount:
             return json.dumps({
                 "success": False,
                 "error": f"Subtransaction amounts ({sub_total}) must sum to parent amount ({amount}).",
             })
-        txn["subtransactions"] = subs
+        txn["subtransactions"] = subtransactions
 
     result = _api_request(f"/budgets/{bid}/transactions", method="POST", body={"transaction": txn})
     t = result.get("data", {}).get("transaction", {})
@@ -885,7 +877,7 @@ def update_transaction(
     cleared: Optional[str] = None,
     approved: Optional[bool] = None,
     flag_color: Optional[str] = None,
-    subtransactions_json: Optional[str] = None,
+    subtransactions: Optional[list] = None,
     budget_id: Optional[str] = None,
 ) -> str:
     """Update an existing transaction.
@@ -902,7 +894,7 @@ def update_transaction(
         cleared: New cleared status: "cleared", "uncleared", or "reconciled".
         approved: New approved status.
         flag_color: New flag color: red, orange, yellow, green, blue, purple.
-        subtransactions_json: JSON string of subtransaction array to convert this into a split transaction.
+        subtransactions: Array of subtransaction objects to convert this into a split transaction.
                 Each item: {"amount": int, "category_id": "uuid", "memo": "text", "payee_id": "uuid", "payee_name": "text"}.
                 Only amount and category_id are required per sub. The sub amounts must sum to the parent amount.
                 When adding subtransactions, also provide the new parent amount if changing it.
@@ -938,14 +930,8 @@ def update_transaction(
     if flag_color is not None:
         txn["flag_color"] = flag_color
 
-    if subtransactions_json is not None:
-        try:
-            subs = json.loads(subtransactions_json)
-        except json.JSONDecodeError as e:
-            return json.dumps({"success": False, "error": f"Invalid subtransactions_json: {e}"})
-        if not isinstance(subs, list):
-            return json.dumps({"success": False, "error": "subtransactions_json must be a JSON array."})
-        txn["subtransactions"] = subs
+    if subtransactions is not None:
+        txn["subtransactions"] = subtransactions
 
     if not txn:
         return json.dumps({"success": False, "error": "No fields to update. Provide at least one field."})
