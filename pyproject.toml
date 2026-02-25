@@ -1,0 +1,13 @@
+[project]
+name = "ynab-mcp"
+version = "1.0.0"
+description = "MCP server for YNAB (You Need A Budget) -- manage budgets, transactions, and categories"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]==1.26.0",
+    "python-dotenv==1.2.1",
+    "uvicorn==0.34.0",
+]
+
+[project.scripts]
+ynab-mcp = "server:mcp.run"
