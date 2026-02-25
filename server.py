@@ -725,6 +725,7 @@ def create_transaction(
     cleared: str = "cleared",
     approved: bool = True,
     flag_color: Optional[str] = None,
+    subtransactions_json: Optional[str] = None,
     budget_id: Optional[str] = None,
 ) -> str:
     """Create a new transaction.
@@ -736,15 +737,21 @@ def create_transaction(
                 Example: -50000 = -$50.00 outflow, 150000 = $150.00 inflow.
         payee_name: Name of payee (creates new payee if doesn't exist). Use this OR payee_id.
         payee_id: UUID of existing payee. Use this OR payee_name.
-        category_id: UUID of the budget category.
+        category_id: UUID of the budget category. Omit when using subtransactions (each sub has its own).
         memo: Transaction memo.
         cleared: Cleared status: "cleared", "uncleared", or "reconciled". Defaults to "cleared".
         approved: Whether the transaction is approved. Defaults to True.
         flag_color: Optional flag: red, orange, yellow, green, blue, purple.
+        subtransactions_json: JSON string of subtransaction array for split transactions.
+                Each item: {"amount": int, "category_id": "uuid", "memo": "text", "payee_id": "uuid", "payee_name": "text"}.
+                Only amount and category_id are required per sub. The sub amounts must sum to the parent amount.
+                When using subtransactions, omit category_id on the parent (it becomes a split).
+                Example: '[{"amount": -50000, "category_id": "abc-123", "memo": "Groceries"},
+                           {"amount": -25000, "category_id": "def-456", "memo": "B/B portion"}]'
         budget_id: Budget ID (uses default if omitted).
 
     Returns:
-        Created transaction details with id, date, amount, payee, category.
+        Created transaction details with id, date, amount, payee, category, and subtransactions.
     """
     _require_config()
     _validate_cleared(cleared)
@@ -769,10 +776,25 @@ def create_transaction(
     if flag_color:
         txn["flag_color"] = flag_color
 
+    if subtransactions_json:
+        try:
+            subs = json.loads(subtransactions_json)
+        except json.JSONDecodeError as e:
+            return json.dumps({"success": False, "error": f"Invalid subtransactions_json: {e}"})
+        if not isinstance(subs, list):
+            return json.dumps({"success": False, "error": "subtransactions_json must be a JSON array."})
+        sub_total = sum(s.get("amount", 0) for s in subs)
+        if sub_total != amount:
+            return json.dumps({
+                "success": False,
+                "error": f"Subtransaction amounts ({sub_total}) must sum to parent amount ({amount}).",
+            })
+        txn["subtransactions"] = subs
+
     result = _api_request(f"/budgets/{bid}/transactions", method="POST", body={"transaction": txn})
     t = result.get("data", {}).get("transaction", {})
 
-    return json.dumps({
+    response = {
         "success": True,
         "id": t.get("id"),
         "date": t.get("date"),
@@ -784,7 +806,21 @@ def create_transaction(
         "cleared": t.get("cleared"),
         "approved": t.get("approved"),
         "memo": t.get("memo"),
-    }, indent=2)
+    }
+    subtxns = t.get("subtransactions", [])
+    if subtxns:
+        response["subtransactions"] = [
+            {
+                "id": s.get("id"),
+                "amount": s.get("amount"),
+                "amount_display": _format_milliunits(s.get("amount")),
+                "payee_name": s.get("payee_name"),
+                "category_name": s.get("category_name"),
+                "memo": s.get("memo"),
+            }
+            for s in subtxns
+        ]
+    return json.dumps(response, indent=2)
 
 
 @mcp.tool()
@@ -849,6 +885,7 @@ def update_transaction(
     cleared: Optional[str] = None,
     approved: Optional[bool] = None,
     flag_color: Optional[str] = None,
+    subtransactions_json: Optional[str] = None,
     budget_id: Optional[str] = None,
 ) -> str:
     """Update an existing transaction.
@@ -865,6 +902,10 @@ def update_transaction(
         cleared: New cleared status: "cleared", "uncleared", or "reconciled".
         approved: New approved status.
         flag_color: New flag color: red, orange, yellow, green, blue, purple.
+        subtransactions_json: JSON string of subtransaction array to convert this into a split transaction.
+                Each item: {"amount": int, "category_id": "uuid", "memo": "text", "payee_id": "uuid", "payee_name": "text"}.
+                Only amount and category_id are required per sub. The sub amounts must sum to the parent amount.
+                When adding subtransactions, also provide the new parent amount if changing it.
         budget_id: Budget ID (uses default if omitted).
 
     Returns:
@@ -897,6 +938,15 @@ def update_transaction(
     if flag_color is not None:
         txn["flag_color"] = flag_color
 
+    if subtransactions_json is not None:
+        try:
+            subs = json.loads(subtransactions_json)
+        except json.JSONDecodeError as e:
+            return json.dumps({"success": False, "error": f"Invalid subtransactions_json: {e}"})
+        if not isinstance(subs, list):
+            return json.dumps({"success": False, "error": "subtransactions_json must be a JSON array."})
+        txn["subtransactions"] = subs
+
     if not txn:
         return json.dumps({"success": False, "error": "No fields to update. Provide at least one field."})
 
@@ -907,7 +957,7 @@ def update_transaction(
     )
     t = result.get("data", {}).get("transaction", {})
 
-    return json.dumps({
+    response = {
         "success": True,
         "id": t.get("id"),
         "date": t.get("date"),
@@ -919,7 +969,21 @@ def update_transaction(
         "cleared": t.get("cleared"),
         "approved": t.get("approved"),
         "memo": t.get("memo"),
-    }, indent=2)
+    }
+    subtxns = t.get("subtransactions", [])
+    if subtxns:
+        response["subtransactions"] = [
+            {
+                "id": s.get("id"),
+                "amount": s.get("amount"),
+                "amount_display": _format_milliunits(s.get("amount")),
+                "payee_name": s.get("payee_name"),
+                "category_name": s.get("category_name"),
+                "memo": s.get("memo"),
+            }
+            for s in subtxns
+        ]
+    return json.dumps(response, indent=2)
 
 
 @mcp.tool()
@@ -961,7 +1025,8 @@ def create_transactions_bulk(
 
     The JSON should contain a "transactions" array where each item has:
     account_id (required), date (required), amount (required in milliunits),
-    and optionally: payee_name, payee_id, category_id, memo, cleared, approved, flag_color.
+    and optionally: payee_name, payee_id, category_id, memo, cleared, approved, flag_color,
+    subtransactions (array of {amount, category_id, memo, payee_id, payee_name}).
 
     Args:
         transactions_json: JSON string with a "transactions" array.
