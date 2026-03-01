@@ -27,6 +27,7 @@ Run with uv:
 """
 
 import contextvars
+import hmac
 import json
 import logging
 import os
@@ -98,7 +99,7 @@ class _StaticTokenVerifier:
         self._expected = expected_token
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        if not self._expected or token != self._expected:
+        if not self._expected or not hmac.compare_digest(token, self._expected):
             return None
         return AccessToken(
             token=token,
@@ -1308,7 +1309,7 @@ class MultiUserMiddleware:
                 await send({
                     "type": "http.response.body",
                     "body": json.dumps({
-                        "error": f"Unknown user: '{username}'. No YNAB_TOKEN_{username.upper()} configured."
+                        "error": "Not found"
                     }).encode(),
                 })
                 return
