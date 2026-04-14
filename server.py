@@ -181,6 +181,8 @@ Natural language hints for tool selection:
 - "Move money to..." / "budget more for..." → update_month_category
 - "What's coming up?" / "scheduled..." / "recurring..." → get_scheduled_transactions
 - "Show me this month" / "monthly overview" → get_month
+- "Create a category group" / "add a new group" → create_category_group
+- "Create a category" / "add a category to..." → create_category (requires category_group_id)
 """,
     stateless_http=True,
     json_response=True,
@@ -501,6 +503,71 @@ def get_categories(
     return json.dumps({
         "success": True,
         "category_groups": groups,
+        "server_knowledge": result.get("data", {}).get("server_knowledge"),
+    }, indent=2)
+
+
+@mcp.tool()
+def create_category_group(
+    name: str,
+    budget_id: Optional[str] = None,
+) -> str:
+    """Create a new category group in a budget.
+
+    Args:
+        name: The name of the category group (max 50 characters).
+        budget_id: Budget ID (uses default if omitted).
+
+    Returns:
+        The created category group with its id and name.
+    """
+    _require_config()
+    bid = _resolve_budget_id(budget_id)
+
+    body = {"category_group": {"name": name}}
+    result = _api_request(f"/plans/{bid}/category_groups", method="POST", body=body)
+    group = result.get("data", {}).get("category_group", {})
+
+    return json.dumps({
+        "success": True,
+        "category_group": {
+            "id": group.get("id"),
+            "name": group.get("name"),
+        },
+        "server_knowledge": result.get("data", {}).get("server_knowledge"),
+    }, indent=2)
+
+
+@mcp.tool()
+def create_category(
+    name: str,
+    category_group_id: str,
+    budget_id: Optional[str] = None,
+) -> str:
+    """Create a new category within an existing category group.
+
+    Args:
+        name: The name of the category (max 50 characters).
+        category_group_id: The ID of the category group to add this category to.
+        budget_id: Budget ID (uses default if omitted).
+
+    Returns:
+        The created category with its id, name, and category_group_id.
+    """
+    _require_config()
+    bid = _resolve_budget_id(budget_id)
+
+    body = {"category": {"name": name, "category_group_id": category_group_id}}
+    result = _api_request(f"/plans/{bid}/categories", method="POST", body=body)
+    category = result.get("data", {}).get("category", {})
+
+    return json.dumps({
+        "success": True,
+        "category": {
+            "id": category.get("id"),
+            "name": category.get("name"),
+            "category_group_id": category.get("category_group_id"),
+        },
         "server_knowledge": result.get("data", {}).get("server_knowledge"),
     }, indent=2)
 
